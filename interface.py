@@ -251,7 +251,7 @@ def main(page: ft.Page):
                             src=thumbnail,
                             width=54,
                             height=54,
-                            fit=ft.ImageFit.COVER,
+                            fit="cover",
                             error_content=ft.Container(
                                 content=ft.Text("🎵", size=22),
                                 width=54,
