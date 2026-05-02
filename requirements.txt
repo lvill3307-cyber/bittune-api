@@ -3,3 +3,4 @@ uvicorn[standard]==0.30.1
 yt-dlp==2024.5.27
 python-multipart==0.0.9
 httpx==0.27.0
+imageio-ffmpeg==0.5.1

@@ -1,6 +1,5 @@
 """
-BitTune Backend v3 - FastAPI + yt-dlp + FFmpeg
-Search results + download by video ID
+BitTune Backend v3 - FastAPI + yt-dlp + FFmpeg (via imageio-ffmpeg)
 """
 
 from fastapi import FastAPI, HTTPException
@@ -13,6 +12,17 @@ import uuid
 import threading
 from pathlib import Path
 import time
+
+# ---- Instala FFmpeg via imageio-ffmpeg (funciona en Render free) ----
+try:
+    import imageio_ffmpeg
+    ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+    ffmpeg_dir = str(Path(ffmpeg_path).parent)
+    os.environ["PATH"] = ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")
+    print(f"[ffmpeg] encontrado en: {ffmpeg_path}")
+except Exception as e:
+    print(f"[ffmpeg] no se pudo cargar imageio-ffmpeg: {e}")
+# ---------------------------------------------------------------------
 
 app = FastAPI(title="BitTune API", version="3.0.0")
 
@@ -37,7 +47,7 @@ class SearchQuery(BaseModel):
 class DownloadRequest(BaseModel):
     video_id: str
     title: str
-    format: str = "flac"   # "flac" o "mp3"
+    format: str = "flac"
 
 
 def limpiar_viejos():
@@ -64,6 +74,7 @@ def segundos_a_tiempo(seg):
 def root():
     return {"app": "BitTune API", "version": "3.0.0", "status": "online"}
 
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -71,10 +82,6 @@ def health():
 
 @app.post("/search")
 def buscar(req: SearchQuery):
-    """
-    Busca canciones en YouTube y devuelve lista con metadata.
-    NO descarga nada, solo info.
-    """
     try:
         ydl_opts = {
             "quiet": True,
@@ -94,7 +101,7 @@ def buscar(req: SearchQuery):
             vid_id = entry.get("id", "")
             resultados.append({
                 "id": vid_id,
-                "title": entry.get("title", "Sin título"),
+                "title": entry.get("title", "Sin titulo"),
                 "artist": entry.get("uploader", entry.get("channel", "Desconocido")),
                 "duration": segundos_a_tiempo(entry.get("duration")),
                 "duration_sec": entry.get("duration", 0),
@@ -142,7 +149,7 @@ def hacer_descarga(job_id: str, video_url: str, title: str, fmt: str):
                 archivo = posibles[0]
                 ext = archivo.suffix.lstrip(".")
             else:
-                raise FileNotFoundError("Archivo no encontrado")
+                raise FileNotFoundError("Archivo no encontrado tras descarga")
 
         download_jobs[job_id].update({
             "status": "done",

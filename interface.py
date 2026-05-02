@@ -11,13 +11,23 @@ import os
 import sys
 from pathlib import Path
 
-# ============================================================
-# CAMBIA ESTA URL cuando despliegues en Render
-# ============================================================
 API_URL = "https://bittune-api.onrender.com"
 
 CARPETA_MUSICA = Path.home() / "Music" / "BitTune"
 CARPETA_MUSICA.mkdir(parents=True, exist_ok=True)
+
+# ---- Keepalive: despierta Render cada 50 segundos ----
+def _keepalive():
+    while True:
+        try:
+            httpx.get(f"{API_URL}/health", timeout=15)
+            print("[keepalive] servidor despierto OK")
+        except Exception as e:
+            print(f"[keepalive] sin respuesta: {e}")
+        time.sleep(50)
+
+threading.Thread(target=_keepalive, daemon=True).start()
+# -------------------------------------------------------
 
 # Colores
 BG          = "#0A0E13"
@@ -25,8 +35,8 @@ SURFACE     = "#111820"
 CARD        = "#161E28"
 CARD_HOVER  = "#1C2633"
 BORDER      = "#1F2D3D"
-ACCENT      = "#1ED760"   # verde spotify
-ACCENT2     = "#FF6B00"   # naranja descarga
+ACCENT      = "#1ED760"
+ACCENT2     = "#FF6B00"
 GOLD        = "#F5A623"
 TEXT        = "#E8F0F7"
 MUTED       = "#4A6072"
@@ -48,9 +58,10 @@ def main(page: ft.Page):
     estado = {
         "formato": "flac",
         "buscando": False,
-        "cola": [],          # lista de dicts {id, title, artist, format}
+        "cola": [],
         "descargando": False,
         "historial": [],
+        "servidor_listo": False,
     }
 
     # ================================================================
@@ -68,8 +79,8 @@ def main(page: ft.Page):
     # ================================================================
     # HEADER
     # ================================================================
-    status_text = ft.Text("", color=MUTED, size=12, text_align=ft.TextAlign.CENTER)
-    progress_ring = ft.ProgressRing(visible=False, color=ACCENT, width=16, height=16, stroke_width=2)
+    status_text = ft.Text("Conectando al servidor...", color=MUTED, size=12, text_align=ft.TextAlign.CENTER)
+    progress_ring = ft.ProgressRing(visible=True, color=ACCENT, width=16, height=16, stroke_width=2)
 
     header = ft.Container(
         content=ft.Row(
@@ -88,7 +99,11 @@ def main(page: ft.Page):
                     spacing=1,
                 ),
                 ft.Container(expand=True),
-                ft.Row([progress_ring, status_text], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                ft.Row(
+                    [progress_ring, status_text],
+                    spacing=8,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
             ],
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         ),
@@ -165,7 +180,7 @@ def main(page: ft.Page):
 
     formato_row = ft.Row(
         [
-            ft.Text("Formato de descarga:", size=11, color=MUTED),
+            ft.Text("Formato:", size=11, color=MUTED),
             btn_flac,
             btn_mp3,
         ],
@@ -185,12 +200,7 @@ def main(page: ft.Page):
                     [
                         ft.Text("RESULTADOS", size=10, color=MUTED, weight=ft.FontWeight.BOLD),
                         ft.Container(expand=True),
-                        ft.Container(
-                            content=ft.Text("Ver todo en YouTube", size=10, color=MUTED),
-                            ink=True,
-                            border_radius=6,
-                            padding=4,
-                        ),
+                        ft.Text("YouTube Music", size=10, color=MUTED),
                     ]
                 ),
                 ft.Container(height=6),
@@ -204,7 +214,6 @@ def main(page: ft.Page):
     )
 
     def build_resultado_card(track):
-        """Tarjeta de resultado tipo Spotify"""
         vid_id = track["id"]
         titulo = track["title"]
         artista = track["artist"]
@@ -212,25 +221,17 @@ def main(page: ft.Page):
         thumbnail = track["thumbnail"]
         views = fmt_views(track.get("views", 0))
 
-        # Badge duración
-        dur_badge = ft.Container(
-            content=ft.Text(duracion, size=10, color=MUTED),
-            padding=ft.padding.only(right=4),
-        )
-
-        # Botón descargar esta canción
         btn_dl = ft.Container(
-            content=ft.Text("⬇", size=16, color=ACCENT2),
+            content=ft.Text("⬇", size=18, color=ACCENT2),
             on_click=lambda _, t=titulo, a=artista, v=vid_id: descargar_uno(v, t, a),
             ink=True,
             border_radius=8,
             padding=6,
-            tooltip=f"Descargar {titulo[:30]}",
+            tooltip="Descargar",
         )
 
-        # Botón agregar a cola
         btn_cola = ft.Container(
-            content=ft.Text("+", size=18, color=MUTED, weight=ft.FontWeight.BOLD),
+            content=ft.Text("+", size=20, color=MUTED, weight=ft.FontWeight.BOLD),
             on_click=lambda _, t=titulo, a=artista, v=vid_id: agregar_cola(v, t, a),
             ink=True,
             border_radius=8,
@@ -238,8 +239,8 @@ def main(page: ft.Page):
             tooltip="Agregar a la cola",
         )
 
-        titulo_corto = titulo[:42] + "..." if len(titulo) > 42 else titulo
-        artista_corto = artista[:28] + "..." if len(artista) > 28 else artista
+        titulo_corto = titulo[:44] + "..." if len(titulo) > 44 else titulo
+        artista_corto = artista[:30] + "..." if len(artista) > 30 else artista
 
         card = ft.Container(
             content=ft.Row(
@@ -248,13 +249,13 @@ def main(page: ft.Page):
                     ft.Container(
                         content=ft.Image(
                             src=thumbnail,
-                            width=52,
-                            height=52,
+                            width=54,
+                            height=54,
                             fit=ft.ImageFit.COVER,
                             error_content=ft.Container(
-                                content=ft.Text("🎵", size=20),
-                                width=52,
-                                height=52,
+                                content=ft.Text("🎵", size=22),
+                                width=54,
+                                height=54,
                                 bgcolor=CARD,
                                 alignment=ft.alignment.center,
                                 border_radius=8,
@@ -262,23 +263,23 @@ def main(page: ft.Page):
                         ),
                         border_radius=8,
                         clip_behavior=ft.ClipBehavior.HARD_EDGE,
-                        width=52,
-                        height=52,
+                        width=54,
+                        height=54,
                     ),
                     # Info
                     ft.Column(
                         [
                             ft.Text(titulo_corto, color=TEXT, size=13, weight=ft.FontWeight.W_600),
                             ft.Text(artista_corto, color=MUTED, size=11),
-                            ft.Text(views, color=MUTED, size=10) if views else ft.Container(),
+                            ft.Text(views, color=MUTED, size=10) if views else ft.Container(height=0),
                         ],
                         spacing=2,
                         expand=True,
                     ),
-                    # Controles
+                    # Controles derecha
                     ft.Column(
                         [
-                            dur_badge,
+                            ft.Text(duracion, size=10, color=MUTED),
                             ft.Row([btn_cola, btn_dl], spacing=0),
                         ],
                         spacing=4,
@@ -334,10 +335,7 @@ def main(page: ft.Page):
             fila = ft.Container(
                 content=ft.Row(
                     [
-                        ft.Container(
-                            content=ft.Text(str(i + 1), size=10, color=MUTED),
-                            width=20,
-                        ),
+                        ft.Text(str(i + 1), size=10, color=MUTED, width=18),
                         ft.Text("🎵", size=12),
                         ft.Column(
                             [
@@ -348,12 +346,7 @@ def main(page: ft.Page):
                             expand=True,
                         ),
                         ft.Container(
-                            content=ft.Text(
-                                item["format"].upper(),
-                                size=9,
-                                color="#000",
-                                weight=ft.FontWeight.BOLD,
-                            ),
+                            content=ft.Text(item["format"].upper(), size=9, color="#000", weight=ft.FontWeight.BOLD),
                             bgcolor=ACCENT if item["format"] == "flac" else ACCENT2,
                             border_radius=4,
                             padding=ft.padding.symmetric(horizontal=6, vertical=2),
@@ -385,7 +378,7 @@ def main(page: ft.Page):
             "format": estado["formato"],
         })
         actualizar_cola_ui()
-        status_text.value = f"'{titulo[:25]}' agregado a la cola"
+        status_text.value = f"'{titulo[:25]}' en cola"
         status_text.color = ACCENT2
         page.update()
 
@@ -477,10 +470,10 @@ def main(page: ft.Page):
     )
 
     def poll_y_guardar(job_id, titulo, artista, fmt):
-        max_intentos = 150
+        max_intentos = 180  # 6 minutos max
         for _ in range(max_intentos):
             try:
-                r = httpx.get(f"{API_URL}/status/{job_id}", timeout=10)
+                r = httpx.get(f"{API_URL}/status/{job_id}", timeout=15)
                 data = r.json()
                 s = data.get("status", "")
 
@@ -492,7 +485,7 @@ def main(page: ft.Page):
                     status_text.value = "Guardando en tu PC..."
                     page.update()
 
-                    archivo_r = httpx.get(f"{API_URL}/file/{job_id}", timeout=180)
+                    archivo_r = httpx.get(f"{API_URL}/file/{job_id}", timeout=300)
                     ext = data.get("extension", fmt)
                     titulo_limpio = titulo.replace("/", "-").replace("\\", "-")[:60]
                     ruta = CARPETA_MUSICA / f"{titulo_limpio}.{ext}"
@@ -501,14 +494,13 @@ def main(page: ft.Page):
                     size_mb = round(ruta.stat().st_size / (1024 * 1024), 2)
                     httpx.delete(f"{API_URL}/job/{job_id}", timeout=10)
 
-                    status_text.value = f"✓ Descargado"
+                    status_text.value = "✓ Descargado"
                     status_text.color = SUCCESS
                     progress_ring.visible = False
                     progress_bar.visible = False
                     agregar_historial(titulo, artista, size_mb, ext)
                     estado["descargando"] = False
 
-                    # Si hay cola, sigue
                     if estado["cola"]:
                         siguiente = estado["cola"].pop(0)
                         actualizar_cola_ui()
@@ -551,7 +543,7 @@ def main(page: ft.Page):
             r = httpx.post(
                 f"{API_URL}/download",
                 json={"video_id": vid_id, "title": titulo, "format": fmt},
-                timeout=15,
+                timeout=60,
             )
             job_id = r.json()["job_id"]
             hilo = threading.Thread(
@@ -575,9 +567,7 @@ def main(page: ft.Page):
         _lanzar_job(vid_id, titulo, artista, estado["formato"])
 
     def descargar_cola_completa():
-        if not estado["cola"]:
-            return
-        if estado["descargando"]:
+        if not estado["cola"] or estado["descargando"]:
             return
         primera = estado["cola"].pop(0)
         actualizar_cola_ui()
@@ -591,11 +581,10 @@ def main(page: ft.Page):
     _search_timer = [None]
 
     def on_search_change(e):
-        # Búsqueda automática al dejar de escribir (debounce 800ms)
         if _search_timer[0]:
             _search_timer[0].cancel()
         if len(e.control.value.strip()) >= 3:
-            _search_timer[0] = threading.Timer(0.8, hacer_busqueda)
+            _search_timer[0] = threading.Timer(0.9, hacer_busqueda)
             _search_timer[0].start()
 
     def hacer_busqueda():
@@ -617,7 +606,7 @@ def main(page: ft.Page):
                 r = httpx.post(
                     f"{API_URL}/search",
                     json={"query": query, "max_results": 8},
-                    timeout=20,
+                    timeout=60,   # 60s para dar tiempo a que despierte Render
                 )
                 data = r.json()
                 resultados = data.get("results", [])
@@ -625,7 +614,7 @@ def main(page: ft.Page):
                 resultados_column.controls.clear()
 
                 if not resultados:
-                    no_results_text.value = "Sin resultados para esa búsqueda"
+                    no_results_text.value = "Sin resultados"
                     no_results_text.visible = True
                 else:
                     for track in resultados:
@@ -635,8 +624,11 @@ def main(page: ft.Page):
                 status_text.value = f"{len(resultados)} resultados"
                 status_text.color = MUTED
 
+            except httpx.TimeoutException:
+                status_text.value = "Servidor tardando, reintenta en 10s"
+                status_text.color = ACCENT2
             except Exception as e:
-                status_text.value = "Error al buscar — revisa conexion"
+                status_text.value = f"Error: {str(e)[:40]}"
                 status_text.color = ERROR
 
             finally:
@@ -645,6 +637,34 @@ def main(page: ft.Page):
                 page.update()
 
         threading.Thread(target=_buscar, daemon=True).start()
+
+    # ================================================================
+    # VERIFICAR SERVIDOR AL INICIO
+    # ================================================================
+    def verificar_servidor():
+        for intento in range(6):  # intenta hasta 60s
+            try:
+                r = httpx.get(f"{API_URL}/health", timeout=12)
+                if r.status_code == 200:
+                    status_text.value = "Listo para buscar"
+                    status_text.color = SUCCESS
+                    progress_ring.visible = False
+                    estado["servidor_listo"] = True
+                    page.update()
+                    return
+            except:
+                status_text.value = f"Despertando servidor... ({intento+1}/6)"
+                status_text.color = ACCENT2
+                progress_ring.visible = True
+                page.update()
+            time.sleep(10)
+
+        status_text.value = "Servidor no responde — reintenta"
+        status_text.color = ERROR
+        progress_ring.visible = False
+        page.update()
+
+    threading.Thread(target=verificar_servidor, daemon=True).start()
 
     # ================================================================
     # UTILS
