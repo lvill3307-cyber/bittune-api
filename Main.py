@@ -1,5 +1,5 @@
 """
-BitTune Backend v3 - FastAPI + yt-dlp + FFmpeg (via imageio-ffmpeg)
+BitTune Backend v3 - FastAPI + yt-dlp + FFmpeg
 """
 
 from fastapi import FastAPI, HTTPException
@@ -13,18 +13,17 @@ import threading
 from pathlib import Path
 import time
 
-# ---- Instala FFmpeg via imageio-ffmpeg (funciona en Render free) ----
+# ---- FFmpeg via imageio-ffmpeg ----
 try:
     import imageio_ffmpeg
     ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
     ffmpeg_dir = str(Path(ffmpeg_path).parent)
     os.environ["PATH"] = ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")
-    print(f"[ffmpeg] encontrado en: {ffmpeg_path}")
+    print(f"[ffmpeg] OK: {ffmpeg_path}")
 except Exception as e:
-    print(f"[ffmpeg] no se pudo cargar imageio-ffmpeg: {e}")
-# ---------------------------------------------------------------------
+    print(f"[ffmpeg] error: {e}")
 
-app = FastAPI(title="BitTune API", version="3.0.0")
+app = FastAPI(title="BitTune API", version="3.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -72,7 +71,7 @@ def segundos_a_tiempo(seg):
 
 @app.get("/")
 def root():
-    return {"app": "BitTune API", "version": "3.0.0", "status": "online"}
+    return {"app": "BitTune API", "version": "3.1.0", "status": "online"}
 
 
 @app.get("/health")
@@ -83,43 +82,57 @@ def health():
 @app.post("/search")
 def buscar(req: SearchQuery):
     try:
+        resultados = []
+
         ydl_opts = {
             "quiet": True,
-            "extract_flat": True,
-            "default_search": f"ytsearch{req.max_results}",
             "no_warnings": True,
+            "extract_flat": "in_playlist",
+            "skip_download": True,
         }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(req.query, download=False)
 
-        resultados = []
-        entradas = info.get("entries", []) if info else []
+        search_url = f"ytsearch{req.max_results}:{req.query}"
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(search_url, download=False)
+
+        entradas = []
+        if info:
+            if "entries" in info:
+                entradas = [e for e in info["entries"] if e]
+            elif info.get("id"):
+                entradas = [info]
 
         for entry in entradas:
-            if not entry:
-                continue
             vid_id = entry.get("id", "")
+            if not vid_id:
+                continue
             resultados.append({
                 "id": vid_id,
-                "title": entry.get("title", "Sin titulo"),
-                "artist": entry.get("uploader", entry.get("channel", "Desconocido")),
+                "title": entry.get("title") or "Sin titulo",
+                "artist": entry.get("uploader") or entry.get("channel") or "Desconocido",
                 "duration": segundos_a_tiempo(entry.get("duration")),
-                "duration_sec": entry.get("duration", 0),
-                "thumbnail": entry.get("thumbnail") or f"https://i.ytimg.com/vi/{vid_id}/mqdefault.jpg",
+                "duration_sec": entry.get("duration") or 0,
+                "thumbnail": (
+                    entry.get("thumbnail")
+                    or (entry.get("thumbnails") or [{}])[-1].get("url", "")
+                    or f"https://i.ytimg.com/vi/{vid_id}/mqdefault.jpg"
+                ),
                 "url": f"https://youtube.com/watch?v={vid_id}",
-                "views": entry.get("view_count", 0),
+                "views": entry.get("view_count") or 0,
             })
 
+        print(f"[search] '{req.query}' -> {len(resultados)} resultados")
         return {"results": resultados, "total": len(resultados)}
 
     except Exception as e:
+        print(f"[search ERROR] {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 def hacer_descarga(job_id: str, video_url: str, title: str, fmt: str):
     try:
         download_jobs[job_id]["status"] = "downloading"
-
         output_path = str(DOWNLOAD_DIR / f"{job_id}.%(ext)s")
 
         if fmt == "flac":
@@ -149,7 +162,7 @@ def hacer_descarga(job_id: str, video_url: str, title: str, fmt: str):
                 archivo = posibles[0]
                 ext = archivo.suffix.lstrip(".")
             else:
-                raise FileNotFoundError("Archivo no encontrado tras descarga")
+                raise FileNotFoundError("Archivo no encontrado")
 
         download_jobs[job_id].update({
             "status": "done",
@@ -157,11 +170,12 @@ def hacer_descarga(job_id: str, video_url: str, title: str, fmt: str):
             "extension": ext,
             "size_mb": round(archivo.stat().st_size / (1024 * 1024), 2),
         })
+        print(f"[download] done: {archivo.name}")
 
     except Exception as e:
         download_jobs[job_id]["status"] = "error"
         download_jobs[job_id]["error"] = str(e)
-        print(f"[ERROR] {job_id}: {e}")
+        print(f"[download ERROR] {job_id}: {e}")
 
 
 @app.post("/download")
@@ -176,12 +190,11 @@ def iniciar_descarga(req: DownloadRequest):
         "format": req.format,
     }
 
-    hilo = threading.Thread(
+    threading.Thread(
         target=hacer_descarga,
         args=(job_id, video_url, req.title, req.format),
         daemon=True,
-    )
-    hilo.start()
+    ).start()
 
     return {"job_id": job_id, "status": "queued"}
 
